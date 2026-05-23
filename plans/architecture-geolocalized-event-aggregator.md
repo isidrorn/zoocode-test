@@ -1,28 +1,3 @@
-# Simple Events Aggregator
-
-## Project Description
-A minimal, event-driven, geolocalized event aggregator built with Spring Boot 4, PostgreSQL, and PostGIS. It follows hexagonal architecture and bounded contexts to avoid overengineering. The application ingests events asynchronously, geocodes addresses to coordinates, and provides spatial search capabilities.
-
-## Tech Stack
-- **Framework**: Spring Boot 4.0.x
-- **Language**: Java 25
-- **Database**: PostgreSQL 16 + PostGIS extension
-- **Migrations**: Flyway
-- **Testing**: JUnit 5, Testcontainers
-- **Build Tools**: Maven & Gradle
-- **Geocoding**: Photon API (free, no API key required)
-- **API Documentation**: SpringDoc OpenAPI
-
-## Brief Description of Zoocode
-Zoocode is a test project used to demonstrate architectural patterns and best practices in software development. It serves as a sandbox for experimenting with new technologies, design approaches, and production-ready implementations.
-
-## Initial Prompt
-The initial request was: "Design a minimal architecture for a geolocalized event aggregator. Requirements: Spring Boot, PostgreSQL, event-driven ingestion, scalable, avoid overengineering, propose bounded contexts and package structure."
-
-## Architecture Plan
-The full architecture plan is included below. It was designed using the **Architect** mode and approved by the user before implementation.
-
-```markdown
 # Geolocalized Event Aggregator — Architecture Plan
 
 ## 1. Design Principles
@@ -246,11 +221,126 @@ sequenceDiagram
 
 ---
 
-## 5. V1 Implementation Roadmap
+## 5. Database Schema (Key Tables)
+
+```sql
+-- Extension required for geolocation
+CREATE EXTENSION IF NOT EXISTS postgis;
+
+CREATE TABLE events (
+    id            UUID PRIMARY KEY,
+    title         VARCHAR(200) NOT NULL,
+    description   TEXT,
+    category      VARCHAR(50),
+    status        VARCHAR(20) NOT NULL DEFAULT 'DRAFT',
+    source        VARCHAR(20) NOT NULL,
+    source_id     VARCHAR(100),                -- ID from external source
+    organizer     VARCHAR(200),
+    start_at      TIMESTAMP WITH TIME ZONE NOT NULL,
+    end_at        TIMESTAMP WITH TIME ZONE,
+    created_at    TIMESTAMP WITH TIME ZONE NOT NULL,
+    updated_at    TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE TABLE event_locations (
+    id            UUID PRIMARY KEY REFERENCES events(id),
+    address       TEXT,
+    city          VARCHAR(100),
+    country       VARCHAR(100),
+    geom          GEOGRAPHY(Point, 4326) NOT NULL,   -- PostGIS spatial column
+    created_at    TIMESTAMP WITH TIME ZONE NOT NULL
+);
+
+CREATE INDEX idx_event_locations_geom ON event_locations USING GIST (geom);
+CREATE INDEX idx_events_status ON events (status);
+CREATE INDEX idx_events_start_at ON events (start_at);
+CREATE UNIQUE INDEX idx_events_source ON events (source, source_id);
+```
+
+---
+
+## 6. Technology Choices
+
+| Component | Choice | Rationale |
+|---|---|---|
+| Framework | Spring Boot 4.0.x | Required. Latest stable with Java 25 support. |
+| Language | Java 25 | Required. Records for DTOs, sealed classes for domain model. |
+| Database | PostgreSQL 16 + PostGIS | Spatial queries, GIST indexes, JSONB for flexible fields. |
+| Migrations | Flyway | Versioned, repeatable, production-safe. |
+| Async Events | Spring `ApplicationEvent` + `@Async` | Zero infrastructure, can be swapped for Kafka later. |
+| Geocoding | Photon API | Free, fast, no API key needed for low volume. |
+| Testing | JUnit 5 + Testcontainers | Integration tests with real PostgreSQL + PostGIS. |
+| API Docs | SpringDoc OpenAPI | Auto-generated, production documentation. |
+| Monitoring | Spring Actuator | Health checks, metrics, readiness probes. |
+
+---
+
+## 7. Why NOT Overengineering
+
+| Complex pattern | Decision | Why it's not needed yet |
+|---|---|---|
+| Microservices | ❌ Modular monolith | < 10 devs, single domain, less operational cost. |
+| Kafka / RabbitMQ | ❌ Spring Events | Single JVM, no need for persistent message log yet. |
+| Event Sourcing | ❌ State-based persistence | No audit requirement, simpler querying. |
+| CQRS | ❌ Single read/write model | Query load is low, one DB is enough. |
+| API Gateway | ❌ Direct controllers | Single deployable, no routing needed. |
+| Kubernetes | ❌ Single JAR + Docker | Docker Compose is enough for launch. |
+
+When scaling pressure appears, the migration path is clear:
+1. Extract a BC into its own service (clear ports/adapters boundaries)
+2. Swap `SpringEventPublisher` for `KafkaTemplate`
+3. Add read replicas or Elasticsearch for search BC
+
+---
+
+## 8. Configuration Files (Key)
+
+**`build.gradle`** (dependencies subset)
+```
+implementation 'org.springframework.boot:spring-boot-starter-web'
+implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+implementation 'org.springframework.boot:spring-boot-starter-validation'
+implementation 'org.flywaydb:flyway-core'
+implementation 'org.flywaydb:flyway-database-postgresql'
+runtimeOnly 'org.postgresql:postgresql'
+runtimeOnly 'net.postgis:postgis-jdbc:2023.1.0'
+testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+testImplementation 'org.testcontainers:postgresql'
+```
+
+**`application.yml`**
+```yaml
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/zoocode_events
+    username: ${DB_USER:zoocode}
+    password: ${DB_PASSWORD:zoocode}
+  jpa:
+    hibernate:
+      ddl-auto: validate
+  flyway:
+    enabled: true
+  task:
+    execution:
+      pool:
+        core-size: 4
+        max-size: 8
+
+server:
+  port: 8080
+
+geocoding:
+  provider: photon
+  base-url: https://photon.komoot.io/api
+```
+
+---
+
+## 9. V1 Implementation Roadmap
 
 | Step | What | Depends on |
-|---|---|---|  
-| 1 | Project scaffold — build.gradle, application.yml, Flyway migrations | — |
+|---|---|---|
+| 1 | Project scaffold: build.gradle, application.yml, Flyway migrations | — |
 | 2 | `shared/kernel` — DomainEvent, EventPublisher, ValueObject interfaces | 1 |
 | 3 | `event` BC — domain model, JPA persistence, REST CRUD | 2 |
 | 4 | `ingestion` BC — RawEvent, IngestEventUseCase, async event publishing | 3 |
@@ -258,25 +348,3 @@ sequenceDiagram
 | 6 | Integration tests (Testcontainers) covering the full ingest→geocode flow | 3,4,5 |
 | 7 | `search` BC — spatial query endpoint `/api/v1/events/nearby` | 5 |
 | 8 | Docker Compose (app + PostgreSQL + PostGIS) | 1 |
-```
-
-## Implementation Steps and Modes
-The project was built step-by-step using different modes of the AI assistant. Each sub-task was assigned a specific mode to ensure the right focus and expertise.
-
-| Step | Task | Mode Used | Description |
-|---|---|---|---|
-| 1 | Analyze requirements and existing repo | `ask` | Gathered user requirements and existing codebase analysis. |
-| 2 | Design architecture document with bounded contexts, flow diagrams, and package structure | `architect` | Created the comprehensive architecture plan (see above). |
-| 3 | Review plan with user and get approval | `ask` | Presented the plan to the user for feedback and approval. |
-| 4 | Project scaffold — build.gradle, application.yml, Flyway migrations (PostGIS + events + event_locations) | `code` | Set up the project structure and initial configuration. |
-| 5 | shared/kernel — DomainEvent marker interface, EventPublisher port, ValueObject marker | `code` | Implemented core domain interfaces. |
-| 6 | event BC — domain model (Event, Category, Schedule, Organizer, EventStatus), EventRepository port, JPA adapter, REST CRUD controller | `code` | Built the core event management bounded context. |
-| 7 | ingestion BC — RawEvent model, IngestEventUseCase, SpringEventPublisher adapter, webhook/ingestion controller with 202 Accepted | `code` | Implemented event ingestion and async publishing. |
-| 8 | geolocation BC — Coordinates value object, GeocodingService/GeocodingProvider ports, PhotonGeocodingAdapter, PostGIS spatial query repository, async geocode listener | `code` | Added geolocation capabilities and spatial queries. |
-| 9 | Integration tests with Testcontainers covering ingest → geocode → query full flow | `code` | Created end-to-end integration tests. |
-| 10 | search BC — spatial query endpoint nearby?lat=X&lng=Y&radius=Km | `code` | Implemented search functionality. |
-| 11 | Docker Compose (app + PostgreSQL 16 + PostGIS) for local development | `code` | Provided local development environment. |
-| 12 | Update to Spring Boot 4 and add Maven build (pom.xml) | `code` | Upgraded to Spring Boot 4 and added Maven build support. |
-
-## Conclusion
-The Simple Events Aggregator is now a fully functional, production-ready application with a clean hexagonal architecture, event-driven ingestion, and spatial search capabilities. It is built with Spring Boot 4, Java 25, PostgreSQL, and PostGIS, and supports both Gradle and Maven builds. The project is ready for deployment and further extension.

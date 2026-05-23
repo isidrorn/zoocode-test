@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgis/postgis:16-3
+    environment:
+      POSTGRES_DB: event_aggregator
+      POSTGRES_USER: event_aggregator
+      POSTGRES_PASSWORD: event_aggregator
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/event_aggregator
+      SPRING_DATASOURCE_USERNAME: event_aggregator
+      SPRING_DATASOURCE_PASSWORD: event_aggregator
+    depends_on:
+      - postgres
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:
